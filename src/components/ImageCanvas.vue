@@ -23,8 +23,8 @@
       :canvasRef="canvasRef || {}"
       :xMouse="offsetX"
       :yMouse="offsetY"
-      :iw="imageWidth"
-      :ih="imageHeight"
+      :iw="displayImageWidth"
+      :ih="displayImageHeight"
       :origImg="selectedImage"
       @update:origImg="origImg = $event"
       @renderImage="renderImage"
@@ -36,8 +36,8 @@
       :canvasRef="canvasRef || {}"
       :xMouse="offsetX"
       :yMouse="offsetY"
-      :iw="imageWidth"
-      :ih="imageHeight"
+      :iw="displayImageWidth"
+      :ih="displayImageHeight"
       :origImg="selectedImage"
       @update:origImg="origImg = $event"
       @renderImage="renderImage"
@@ -154,13 +154,17 @@ export default {
   emits: ["closeResizeModal"],
   data() {
     return {
+      canvasRef: null,
+      imageData: null,
+      displayImageData: null,
+      displayImage: null,
       imageWidth: 0,
       imageHeight: 0,
+      displayImageWidth: 0,
+      displayImageHeight: 0,
       selectedColor: null,
       selectedColors: "",
       selectedPixel: { x: 0, y: 0 },
-      canvasRef: null,
-      newImg: null,
       selectedScale: 100,
       isModalVisible: this.isResizeModalVisible,
       interpolationAlgorithm: "nearest-neighbor",
@@ -203,7 +207,17 @@ export default {
     },
     selectedImage() {
       this.selectedScale = 100;
-      this.handleImageProportions();
+      const img = new Image();
+      img.crossOrigin = "";
+      img.src = this.selectedImage;
+      img.onload = () => {
+        console.log("Image loaded");
+        this.imageData = this.extractImageData(img);
+        this.imageWidth = this.imageData.width;
+        this.imageHeight = this.imageData.height;
+        this.calcDisplayImageData();
+        this.renderImage();
+      }
     },
     activeTool(newValue) {
       if (newValue === "Пипетка") {
@@ -222,14 +236,16 @@ export default {
         this.filtrPanelVisible = true;
       }
     },
-    newImg: {
-      handler() {
-        this.handleImageProportions();
-      },
-      deep: true,
-    },
   },
   methods: {
+    extractImageData(img) {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        return ctx.getImageData(0, 0, canvas.width, canvas.height);
+    },
     handleMouseDown(event) {
       if (this.activeTool === "Рука") {
         this.dragging = true;
@@ -278,31 +294,36 @@ export default {
         switch (event.key) {
           case "ArrowLeft":
             this.canvasOffsetX -= 10 * shiftModifier;
-            this.renderImage();
             break;
           case "ArrowRight":
             this.canvasOffsetX += 10 * shiftModifier;
-            this.renderImage();
             break;
           case "ArrowUp":
             this.canvasOffsetY -= 10 * shiftModifier;
-            this.renderImage();
             break;
           case "ArrowDown":
             this.canvasOffsetY += 10 * shiftModifier;
-            this.renderImage();
             break;
         }
-      }
-    },
-    handleKeyUp(event) {
-      if (event.key.startsWith("Arrow")) {
         this.renderImage();
       }
     },
+    calcDisplayImageData() {
+      const inittialScaleFactor = this.calculateScaleFactor(this.imageWidth, this.imageHeight);
+      const scaledWidth = Math.round(this.imageData.width * inittialScaleFactor * (this.selectedScale / 100));
+      const scaledHeight = Math.round(this.imageData.height * inittialScaleFactor * (this.selectedScale / 100));
+      this.displayImageData = this.scaleImageData(this.imageData, scaledWidth, scaledHeight);
+    },
     renderImage() {
-      const img = new Image();
-      img.crossOrigin = "";
+
+      console.log("renderImage: Enter");
+
+      if (this.imageData == null) {
+        console.log("renderImage: ImageData is null when render called");
+        return ;
+      }
+
+      const img = this.imageData;
       const canvas = this.canvasRef;
       const ctx = this.canvasRef?.getContext("2d");
       const scrollX = this.$refs.canvas.parentNode.scrollLeft;
@@ -310,93 +331,70 @@ export default {
       const canvasWidth = this.canvasRef.clientWidth;
       const canvasHeight = this.canvasRef.clientHeight;
 
-      img.onload = () => {
-        console.log("Image loaded");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        canvas.width = canvasWidth;
-        canvas.height = canvasHeight;
+      console.log(`W${canvasWidth} H${canvasHeight} CW${canvas.width} CH${canvas.height}`)
 
-        const scaleFactor = this.calculateScaleFactor(img.width, img.height);
-        const scaledWidth = Math.round(
-          img.width * scaleFactor * (this.selectedScale / 100)
-        );
-        const scaledHeight = Math.round(
-          img.height * scaleFactor * (this.selectedScale / 100)
-        );
+      // ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
 
-        let x =
-          Math.round((canvasWidth - scaledWidth) / 2) +
-          this.canvasOffsetX -
-          scrollX;
-        let y =
-          Math.round((canvasHeight - scaledHeight) / 2) +
-          this.canvasOffsetY -
-          scrollY;
+      const inittialScaleFactor = this.calculateScaleFactor(this.imageWidth, this.imageHeight);
+      const scaledWidth = Math.round(img.width * inittialScaleFactor * (this.selectedScale / 100));
+      const scaledHeight = Math.round(img.height * inittialScaleFactor * (this.selectedScale / 100));
 
-        this.offsetX = x;
-        this.offsetY = y;
-        // Добавляем отступы
-        const margin = 10;
-        x = Math.min(Math.max(x, -scaledWidth + margin), canvasWidth - margin);
-        y = Math.min(
-          Math.max(y, -scaledHeight + margin),
-          canvasHeight - margin
-        );
+      console.log(`Scaling: ${img.width},${this.inittialScaleFactor},${this.selectedScale},${scaledWidth}`);
 
-        this.imageWidth = Math.round(img.width * scaleFactor);
-        this.imageHeight = Math.round(img.height * scaleFactor);
+      let x = Math.round((canvasWidth - scaledWidth) / 2) + this.canvasOffsetX - scrollX;
+      let y = Math.round((canvasHeight - scaledHeight) / 2) + this.canvasOffsetY - scrollY;
 
-        ctx.drawImage(img, x, y, scaledWidth, scaledHeight);
-        const aspectRatio = this.imageWidth / this.imageHeight;
-        this.aspectRatio = aspectRatio;
-      };
+      this.offsetX = x;
+      this.offsetY = y;
 
-      img.src = this.selectedImage;
+      this.displayImageWidth = scaledWidth;
+      this.displayImageHeight = scaledHeight;
+
+      // Добавляем отступы
+      const margin = 10;
+      x = Math.min(Math.max(x, - scaledWidth + margin), canvasWidth - margin);
+      y = Math.min(Math.max(y, - scaledHeight + margin), canvasHeight - margin);
+
+      const aspectRatio = this.imageWidth / this.imageHeight;
+      this.aspectRatio = aspectRatio;
+
+      ctx.putImageData(this.displayImageData, x, y);
+
     },
+    scaleImageData(imageData, width, height) {
+      const scaledImageData = new ImageData(width, height);
+      const scaleWidth = width / imageData.width;
+      const scaleHeight = height / imageData.height;
 
-    renderImageAlgoritm(img) {
-      const canvas = this.canvasRef;
-      const ctx = this.canvasRef?.getContext("2d");
-      img.onload = () => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        canvas.width = this.canvasRef.clientWidth;
-        canvas.height = this.canvasRef.clientHeight;
-        ctx.imageSmoothingEnabled = false;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const srcX = Math.floor(x / scaleWidth);
+          const srcY = Math.floor(y / scaleHeight);
+          const srcIndex = (srcY * imageData.width * 4) + (srcX * 4);
+          const destIndex = (y * width * 4) + (x * 4);
 
-        const scaledWidth = Math.round(img.width * (this.selectedScale / 100));
-        const scaledHeight = Math.round(
-          img.height * (this.selectedScale / 100)
-        );
-        const x = Math.round((canvas.width - scaledWidth) / 2);
-        const y = Math.round((canvas.height - scaledHeight) / 2);
-        this.offsetX = x;
-        this.offsetY = y;
-        ctx.drawImage(img, x, y, scaledWidth, scaledHeight);
-        this.imageWidth = scaledWidth;
-        this.imageHeight = scaledHeight;
-      };
-      img.src = this.selectedImage;
-    },
-    handleImageProportions() {
-      if (this.newImg) {
-        this.renderImageAlgoritm(this.newImg);
-      } else {
-        this.renderImage();
+          scaledImageData.data[destIndex] = imageData.data[srcIndex];
+          scaledImageData.data[destIndex + 1] = imageData.data[srcIndex + 1];
+          scaledImageData.data[destIndex + 2] = imageData.data[srcIndex + 2];
+          scaledImageData.data[destIndex + 3] = imageData.data[srcIndex + 3];
+        }
       }
-    },
 
+      return scaledImageData;
+    },   
     calculateScaleFactor(originalWidth, originalHeight) {
       const canvas = this.$refs.canvas;
       const minMargin = 50;
-      const availableWidth = canvas.width - 2 * minMargin;
-      const availableHeight = canvas.height - 2 * minMargin;
+      const availableWidth = this.canvasRef.clientWidth - 2 * minMargin;
+      const availableHeight = this.canvasRef.clientHeight - 2 * minMargin;
 
       const widthScaleFactor = availableWidth / originalWidth;
       const heightScaleFactor = availableHeight / originalHeight;
 
       return Math.min(widthScaleFactor, heightScaleFactor);
     },
-
     handleCanvasClick(event) {
       const canvasRect = this.$refs.canvas.getBoundingClientRect();
       const canvasOffsetX = (this.canvasRef.clientWidth - this.imageWidth) / 2;
@@ -428,39 +426,25 @@ export default {
       this.selectedColor = { r, g, b };
     },
     handleModalConfirm() {
-      this.scale = 100;
 
-      if (this.resizeType === "pixels") {
-        this.newImg = new Image(this.newWidth, this.newHeight);
-      }
+      let scaledWidth = this.newWidth;
+      let scaledHeight = this.newHeight;
+
       if (this.resizeType === "percentage") {
-        const image = new Image();
-        image.width = (this.newWidth / 100) * this.imageWidth;
-        image.height = (this.newHeight / 100) * this.imageHeight;
-        this.newImg = image;
-      }
-      const canvas = this.canvasRef;
-      const ctx = canvas.getContext("2d");
-      const imageData = ctx.getImageData(
-        0,
-        0,
-        this.imageWidth,
-        this.imageHeight
-      );
-      const resizedImageData = nearestNeighborInterpolation(
-        imageData,
-        this.newWidth,
-        this.newHeight
-      );
-      if (resizedImageData !== null) {
-        canvas.width = this.newWidth;
-        canvas.height = this.newHeight;
-        ctx.putImageData(resizedImageData, 0, 0);
+        scaledWidth = Math.round((this.newWidth / 100) * this.imageWidth);
+        scaledHeight = Math.round((this.newHeight / 100) * this.imageHeight);
       }
 
-      // Обновляем размеры и положение канваса
-      this.canvasOffsetX = 0;
-      this.canvasOffsetY = 0;
+      this.imageData = nearestNeighborInterpolation(
+        this.imageData,
+        scaledWidth,
+        scaledHeight
+      );
+
+      this.imageWidth = this.imageData.width;
+      this.imageHeight = this.imageData.height;
+
+      this.calcDisplayImageData();
       this.renderImage();
 
       this.closeResizeModal();
@@ -514,7 +498,8 @@ export default {
     },
     handleScaleChange(scale) {
       this.selectedScale = scale;
-      this.handleImageProportions();
+      this.calcDisplayImageData();
+      this.renderImage();
     },
     closeResizeModal() {
       this.isModalVisible = false;
@@ -524,17 +509,16 @@ export default {
 
     // Сохранение
     saveImage() {
+
+      if (this.imageData == null) {
+        return ;
+      }
+
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
       canvas.width = this.imageWidth;
       canvas.height = this.imageHeight;
-      ctx.drawImage(
-        this.newImg || this.$refs.canvas,
-        0,
-        0,
-        this.imageWidth,
-        this.imageHeight
-      );
+      ctx.putImageData(this.imageData,0,0);
       const link = document.createElement("a");
       link.href = canvas.toDataURL("image/png");
       link.download = "my_image.png";

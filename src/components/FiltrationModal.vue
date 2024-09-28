@@ -10,6 +10,7 @@
         @change="applyPreset($event.target.value)"
         class="filtration-preset"
       >
+        <option value="bugged">Забаганный фильтр</option>
         <option value="identity">Тождественное отображение</option>
         <option value="sharpen">Повышение резкости</option>
         <option value="gaussian">Фильтр Гаусса (3 на 3)</option>
@@ -68,15 +69,61 @@ export default {
     return {
       togglePreview: false,
       kernel: [
-        [0, 0, 0],
-        [0, 1, 0],
-        [0, 0, 0],
+          [1, 0, -1],
+          [1, 0, -1],
+          [1, 0, -1],
       ],
     };
   },
   methods: {
     closeSetting() {
       this.$emit("closeSetting");
+    },
+    applyFilter(imageData, kernel) {
+      // Check for invalid inputs
+      if (!(imageData instanceof ImageData)) {
+        throw new Error("Invalid input: imageData must be an ImageData object");
+      }
+      if (!Array.isArray(kernel) || kernel.length !== 3 || kernel[0].length !== 3) {
+        throw new Error("Invalid input: kernel must be a 3x3 array");
+      }
+
+      // Get the image dimensions and data
+      const width = imageData.width;
+      const height = imageData.height;
+      const data = imageData.data;
+
+      // Create a new ImageData object to store the filtered image
+      const filteredData = new Uint8ClampedArray(data.length);
+      const filteredImageData = new ImageData(filteredData, width, height);
+
+      // Apply the convolution filter
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          // Calculate the convolution for each pixel
+          let r = 0, g = 0, b = 0;
+          for (let ky = -1; ky <= 1; ky++) {
+            for (let kx = -1; kx <= 1; kx++) {
+              const posX = x + kx;
+              const posY = y + ky;
+              // Wrap image edges
+              const wrappedX = (posX + width) % width;
+              const wrappedY = (posY + height) % height;
+              const pixelIndex = (wrappedY * width * 4) + (wrappedX * 4);
+              r += data[pixelIndex] * kernel[ky + 1][kx + 1];
+              g += data[pixelIndex + 1] * kernel[ky + 1][kx + 1];
+              b += data[pixelIndex + 2] * kernel[ky + 1][kx + 1];
+            }
+          }
+          // Apply the convolution result to the filtered image
+          filteredData[(y * width * 4) + (x * 4)] = r;
+          filteredData[(y * width * 4) + (x * 4) + 1] = g;
+          filteredData[(y * width * 4) + (x * 4) + 2] = b;
+          filteredData[(y * width * 4) + (x * 4) + 3] = data[(y * width * 4) + (x * 4) + 3]; // Copy alpha channel
+        }
+      }
+
+      return filteredImageData;
     },
     applyPreset(preset) {
       const kernels = {
@@ -100,70 +147,117 @@ export default {
           [1, 1, 1],
           [1, 1, 1],
         ],
+        bugged: [
+          [1, 0, -1],
+          [1, 0, -1],
+          [1, 0, -1],
+        ],
       };
       this.kernel = kernels[preset] || kernels.identity;
     },
     updateKernel(event, rowIndex, colIndex) {
-      const num = +event.target.value;
+      const num =+ event.target.value;
       if (!isNaN(num)) {
         this.kernel[rowIndex][colIndex] = num;
       }
     },
-    // Функция для применения фильтрации к изображению на основе заданного ядра
+    normalizeKernel(kernel) {
+      let sum = 0;
+      for (let i = 0; i < kernel.length; i++) {
+        for (let j = 0; j < kernel[i].length; j++) {
+          sum += kernel[i][j];
+        }
+      }
+
+      if (sum === 0) {
+        return kernel;  
+      }
+
+      for (let i = 0; i < kernel.length; i++) {
+        for (let j = 0; j < kernel[i].length; j++) {
+          kernel[i][j] /= sum;
+        }
+      }
+
+      return kernel;
+    },
     calculateFiltration() {
       const ctx = this.canvasRef?.getContext("2d");
       if (!ctx) return;
 
-      // Получение данных изображения из канваса
       const imageData = ctx.getImageData(
         this.xMouse,
         this.yMouse,
         this.iw,
         this.ih
       );
-      // Создание нового массива для хранения отфильтрованных данных изображения
-      const newData = new Uint8ClampedArray(imageData.data.length);
-      // Получение дополненных данных изображения для обработки краевых пикселей
-      const paddedData = this.padImageData(
-        imageData.data,
-        imageData.width,
-        imageData.height
-      );
 
-      // Вычисление суммы всех элементов ядра (для нормализации)
-      const kernelSum = this.kernel.flat().reduce((a, b) => a + b, 0) || 1;
+      const normalizedKernel = this.normalizeKernel(this.kernel)
 
-      // Проход по каждому пикселю изображения
-      for (let y = 0; y < imageData.height; y++) {
-        for (let x = 0; x < imageData.width; x++) {
-          let sumR = 0,
-            sumG = 0,
-            sumB = 0,
-            sumA = 0;
-          // Применение фильтра (свертка с ядром) к пикселям в окрестности
-          for (let ky = 0; ky < 3; ky++) {
-            for (let kx = 0; kx < 3; kx++) {
-              const inputIndex =
-                ((y + ky) * (imageData.width + 2) + (x + kx)) * 4;
-              const weight = this.kernel[ky][kx];
-              sumR += paddedData[inputIndex] * weight;
-              sumG += paddedData[inputIndex + 1] * weight;
-              sumB += paddedData[inputIndex + 2] * weight;
-              sumA += paddedData[inputIndex + 3] * weight;
-            }
-          }
-          const outputIndex = (y * imageData.width + x) * 4;
-          newData[outputIndex] = sumR / kernelSum;
-          newData[outputIndex + 1] = sumG / kernelSum;
-          newData[outputIndex + 2] = sumB / kernelSum;
-          newData[outputIndex + 3] = sumA / kernelSum;
-        }
-      }
+      const filteredImageData = this.applyFilter(imageData, normalizedKernel)
 
-      // Обновление данных изображения в канвасе
-      imageData.data.set(newData);
-      ctx.putImageData(imageData, this.xMouse, this.yMouse);
+      ctx.putImageData(filteredImageData, this.xMouse, this.yMouse);
+
     },
+    // Функция для применения фильтрации к изображению на основе заданного ядра
+    // calculateFiltration() {
+    //   const ctx = this.canvasRef?.getContext("2d");
+    //   if (!ctx) return;
+
+    //   // Получение данных изображения из канваса
+    //   const imageData = ctx.getImageData(
+    //     this.xMouse,
+    //     this.yMouse,
+    //     this.iw,
+    //     this.ih
+    //   );
+    //   // Создание нового массива для хранения отфильтрованных данных изображения
+    //   const newData = new Uint8ClampedArray(imageData.data.length);
+    //   // Получение дополненных данных изображения для обработки краевых пикселей
+    //   const paddedData = this.padImageData(
+    //     imageData.data,
+    //     imageData.width,
+    //     imageData.height
+    //   );
+
+    //   // Вычисление суммы всех элементов ядра (для нормализации)
+    //   const kernelSum = this.kernel.flat().reduce((a, b) => a + b, 0) || 0.001;
+    //   console.log("Kernel: " + this.kernel)
+    //   console.log("Kernel Sum: " + kernelSum)
+
+    //   // Проход по каждому пикселю изображения
+    //   for (let y = 0; y < imageData.height; y++) {
+    //     for (let x = 0; x < imageData.width; x++) {
+    //       let sumR = 0,
+    //         sumG = 0,
+    //         sumB = 0,
+    //         sumA = 0;
+    //       // Применение фильтра (свертка с ядром) к пикселям в окрестности
+    //       for (let ky = 0; ky < 3; ky++) {
+    //         for (let kx = 0; kx < 3; kx++) {
+    //           const inputIndex = ((y + ky) * (imageData.width + 2) + (x + kx)) * 4;
+    //           const weight = this.kernel[ky][kx];
+    //           sumR += paddedData[inputIndex] * weight;
+    //           sumG += paddedData[inputIndex + 1] * weight;
+    //           sumB += paddedData[inputIndex + 2] * weight;
+    //           // sumA += paddedData[inputIndex + 3] * weight;
+    //           sumA = 255;
+    //         }
+    //       }
+    //       const outputIndex = (y * imageData.width + x) * 4;
+    //       newData[outputIndex] = sumR / kernelSum;
+    //       newData[outputIndex + 1] = sumG / kernelSum;
+    //       newData[outputIndex + 2] = sumB / kernelSum;
+    //       newData[outputIndex + 3] = sumA / kernelSum;
+    //     }
+    //   }
+
+    //   console.log(newData);
+
+    //   // Обновление данных изображения в канвасе
+    //   imageData.data.set(newData);
+    //   ctx.putImageData(imageData, this.xMouse, this.yMouse);
+    // },
     // Функция для дополнения данных изображения, чтобы избежать проблем с краевыми пикселями при свертке
     padImageData(data, width, height) {
       const paddedWidth = width + 2;
